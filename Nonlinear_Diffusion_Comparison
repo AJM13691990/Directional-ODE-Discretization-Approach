@@ -1,0 +1,92 @@
+clc;
+clear all;
+format long;
+%% Parameters and User Inputs
+syms u;
+userFunctionStr=input('Enter the diffusion function d(u). For example, simply write 0.5/(1+2*u^2): ','s');
+Diffusion=str2sym(userFunctionStr);
+Derivative_Diffusion=diff(Diffusion,u);
+D=matlabFunction(Diffusion,'Vars',u);
+Dp=matlabFunction(Derivative_Diffusion,'Vars',u);
+
+%% Coordinates and meshing
+l=2; T=1; Nx=500; Nt=(1/4)*10^5; 
+dx=l/(Nx-1); dt=T/Nt; VisualizationTime=floor(Nt/2)*dt;
+x=zeros(Nx,1);
+for i=1:Nx
+    x(i,1)=dx*(i-1);
+end
+
+%% Vectorization, Initialization and Solver
+for activation=0:1
+    u_char=zeros(Nx,1); u_char(2:Nx-1,1)=1;
+    u_new_char=u_char; Adv=zeros(Nx,1);
+    a=zeros(Nx-2,1); b=zeros(Nx-2,1); c=zeros(Nx-2,1); d=zeros(Nx-2,1); dc=zeros(Nx-2,1);
+    lambda=max(D(0:0.01:max(u_char)))*dt/dx^2;
+    if activation==0
+        disp(['lambda=',num2str(lambda)]);
+        disp('Please wait for an output!')
+    end
+    
+    for n=1:Nt
+        t=n*dt;
+        for i=2:Nx-1
+            Dc=(u_char(i+1,1)-u_char(i-1,1))/(2*dx);
+            Adv(i)=-Dc*Dp(u_char(i,1));
+        end
+        Adv(1,1)=-((u_char(2,1)-u_char(1,1))/dx)*Dp(u_char(1,1));
+        Adv(Nx,1)=-((u_char(Nx,1)-u_char(Nx-1,1))/dx)*Dp(u_char(Nx,1));
+        X_advected=x-Adv*dt;
+        X_advected=min(max(X_advected,x(1)),x(end));
+        u_advected=interp1(x,u_char,X_advected,'linear',1);
+        
+        % Implicit Method
+        u_char=activation*u_advected+(1-activation)*u_char;        
+        for i=1:Nx-2
+            lambda=D(u_char(i+1,1))*dt/(dx^2);
+            AD=Dp(u_char(i+1,1));
+            Dc=(u_char(i+2,1)-u_char(i,1))/(2*dx);
+            a(i)=-(1-activation)*(dt/dx)*Dc*AD+lambda; 
+            b(i)=-1-2*lambda; 
+            c(i)=(1-activation)*(dt/dx)*Dc*AD+lambda;
+            d(i)=(-u_char(i+1,1)+(1-activation)*AD*Dc^2*dt);
+            dc(i)=d(i);
+            dc(1)=d(1)-a(1)*0;
+            dc(Nx-2)=d(Nx-2)-a(Nx-2)*0;
+        end
+        
+        M=Nx-2;
+        [Us]=TDMA(a,b,c,dc,M);
+        u_new_char(2:Nx-1,1)=Us;
+        u_new_char(1,1)=0; u_new_char(Nx,1)=0;
+        u_char=u_new_char;
+        
+        % Visualization
+        if t==VisualizationTime
+            figure(1);
+            plot(x,u_char,'LineWidth',1.5);
+            hold on;
+            set(gcf,'Color','black');
+            ax=gca;
+            set(ax,'Color','black','XColor','white','YColor','white','FontName','Cambria','FontSize',11);
+            xlabel('x','FontName','Cambria','FontSize',14,'Color','white');
+            ylabel('Concentration: u(x,t)','FontName','Cambria','FontSize',14,'Color','white');
+            title(['Visualization at t=',num2str(VisualizationTime)],'FontName','Cambria','FontSize',14,'Color','white');
+            legend({'classic Implicit','classic Implicit with diffusion splitting'},'FontName','Cambria','FontSize',14,'TextColor','white','Location','best');
+            grid on;
+            set(ax,'GridColor','white');
+        end
+    end
+end
+
+%% TDMA Function
+function [U]=TDMA(a,b,c,dc,M)
+for j=2:M
+    b(j)=b(j)-a(j)*c(j-1)/b(j-1);
+    dc(j)=dc(j)-a(j)*dc(j-1)/b(j-1);
+end
+U(M)=dc(M)/b(M);
+for j=M-1:-1:1
+    U(j)=(dc(j)-c(j)*U(j+1))/b(j);
+end
+end
