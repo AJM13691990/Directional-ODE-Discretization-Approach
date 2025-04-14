@@ -1,0 +1,206 @@
+clc; clear all;
+%% Input parameters
+Steadt_state_Error=input('Enter the Steadt_state_Error, e.g., 10^-4, meaning the codes breaks at Error<10^-4: ');
+Re=input('Enter Reynolds number (Re), e.g., 100: ');
+Time_Step=input('Enter the time step, e.g., 0.01:');
+p=input('U_wall:=p*X/l+q [0<X<10*w=l, w=4 as default]. Enter value for p, e.g., 0: ');
+q = input('Enter value for q, e.g., 1: ');
+disp('The flow is discharged from f_inlet, meaning the inlet extends from f_inlet*w to w');
+f_inlet=input('Enter value for f_inlet between 0 and x<1, e.g., 0.5: ');
+%% Mesh Generation.........................................................
+m=60;w=4*1;n=240;l=10*w;
+dx=l/(n-1);dy=w/(m-1);
+x=zeros(n,m);y=zeros(n,m);
+for i=1:n
+    for j=1:m
+        x(i,j)=dx*(i-1);
+        y(i,j)=dy*(j-1);
+    end
+end
+%% Parameter Definition....................................................
+dt=Time_Step;Uinlet=1;
+Lambda=(1/Re)*dt/min(dx,dy)^2;
+%% Initialization
+% Initial Velocity
+Vold=zeros(n,m); Uold=zeros(n,m);
+H1=floor(f_inlet*m)+2; H2=m;
+fraction=Steadt_state_Error;
+for j=H1:H2
+    Uold(1,j)=Uinlet; Vold(1,j)=0.0;
+end
+Unew=Uold; Vnew=Vold;
+% Initial StreamFunction...................................................
+Psiold=zeros(n,m);
+Sum=0;
+Psiold(1,1:H1-1)=0;
+for j=H1:H2
+    Sum=Sum+Uold(1,j)*dy; Psiold(1,j)=Sum;
+end
+Psiold(:,m)=Sum; Psinew=Psiold;
+% Initial Vorticity........................................................
+Omegaold=zeros(n,m);
+for j=2:m-1
+    Omegaold(1,j)=(Vold(3,j)-Vold(1,j))/(2*dx)-(Uold(1,j+1)-Uold(1,j-1))/(2*dy);
+    Omegaold(n,j)=(Vold(n,j)-Vold(n-2,j))/(2*dx)-(Uold(n,j+1)-Uold(n,j-1))/(2*dy);
+end
+for i=2:n-1
+    Omegaold(i,1)=(Vold(i+1,1)-Vold(i-1,1))/(2*dx)-(Uold(i,3)-Uold(i,1))/(2*dy);
+    Omegaold(i,m)=(Vold(i+1,m)-Vold(i-1,m))/(2*dx)-(Uold(i,m)-Uold(i,m-2))/(2*dy);
+end
+Omegaold(1,1)=Omegaold(2,1); Omegaold(1,m)=Omegaold(2,m);
+for i=2:n-1
+    for j=2:m-1
+        Omegaold(i,j)=(Vold(i+1,j)-Vold(i-1,j))/(2*dx)-(Uold(i,j+1)-Uold(i,j-1))/(2*dy);
+    end
+end
+Omeganew=Omegaold;
+Omeganewx=Omegaold;
+% TDMA Coef................................................................
+ax=zeros(n-2,1);
+bx=zeros(n-2,1);
+cx=zeros(n-2,1);
+dxx=zeros(n-2,1);
+drxx=zeros(n-2,1);
+ay=zeros(m-2,1);
+by=zeros(m-2,1);
+cy=zeros(m-2,1);
+dyy=zeros(m-2,1);
+dryy=zeros(m-2,1);
+%% Solution Algorithm-ADI..................................................
+tic
+Iteration=Re*10^4;count=0;
+Time=zeros(Iteration,1);Err=zeros(Iteration,1);
+for time=1:Iteration
+    time;
+    count=count+1;
+    Time(count,1)=time;
+    %TDMA x_direction......................................................
+    dtt=dt/2;
+    for j=2:m-1
+        Omegaold(1,j)=(Vold(3,j)-Vold(1,j))/(2*dx)-(Uold(1,j+1)-Uold(1,j-1))/(2*dy);
+        Omegaold(n,j)=(Vold(n,j)-Vold(n-2,j))/(2*dx)-(Uold(n,j+1)-Uold(n,j-1))/(2*dy);
+        for i=1:n-2
+            lambda1=(1/Re)*dtt/(dx^2);
+            ax(i)=lambda1+Uold(i+1,j)*dtt/(2*dx);
+            bx(i)=-2*lambda1-1;
+            cx(i)=lambda1-Uold(i+1,j)*dtt/(2*dx);
+            dxx(i)=-Omegaold(i+1,j)+Vold(i+1,j)*dtt*(Omegaold(i+1,j+1)-Omegaold(i+1,j-1))/(2*dy)-...
+                (1/Re)*dtt*(Omegaold(i+1,j+1)-2*Omegaold(i+1,j)+Omegaold(i+1,j-1))/dy^2;
+            drxx(i)=dxx(i);
+        end
+        drxx(1)=dxx(1)-ax(1)*Omegaold(1,j);
+        drxx(n-2)=dxx(n-2)-cx(n-2)*Omegaold(n,j);
+        M=n-2;
+        [Us]=TDMA(ax,bx,cx,drxx,M);
+        Omeganewx(2:n-1,j)=Us;
+        Omeganewx(1,j)=(Vold(3,j)-Vold(1,j))/(2*dx)-(Uold(1,j+1)-Uold(1,j-1))/(2*dy);
+        Omeganewx(n,j)=(Vold(n,j)-Vold(n-2,j))/(2*dx)-(Uold(n,j+1)-Uold(n,j-1))/(2*dy);
+    end
+    %TDMA y_direction......................................................
+    for i=2:n-1
+        Omegaold(i,1)=(Vold(i+1,1)-Vold(i-1,1))/(2*dx)-(Uold(i,3)-Uold(i,1))/(2*dy);
+        Omegaold(i,m)=(Vold(i+1,m)-Vold(i-1,m))/(2*dx)-(Uold(i,m)-Uold(i,m-2))/(2*dy);
+        for j=1:m-2
+            lambda2=(1/Re)*dtt/(dy^2);
+            ay(j)=lambda2+Vold(i,j+1)*dtt/(2*dy);
+            by(j)=-2*lambda2-1;
+            cy(j)=lambda2-Vold(i,j+1)*dtt/(2*dy);
+            dyy(j)=-Omeganewx(i,j+1)+Uold(i,j+1)*dtt*(Omeganewx(i+1,j+1)-Omeganewx(i-1,j+1))/(2*dx)-...
+                (1/Re)*dtt*(Omeganewx(i+1,j+1)-2*Omeganewx(i,j+1)+Omeganewx(i-1,j+1))/dx^2;
+            dryy(j)=dyy(j);
+        end
+        dryy(1)=dyy(1)-ay(1)*Omegaold(i,1);
+        dryy(m-2)=dyy(m-2)-cy(m-2)*Omegaold(i,m);
+        M=m-2;
+        [Us]=TDMA(ay,by,cy,dryy,M);
+        Omeganew(i,2:m-1)=Us;
+    end
+    % Stream Function......................................................
+    for i=2:n-1
+        for j=2:m-1
+            RHS=(dy^2)*(Psiold(i+1,j)+Psiold(i-1,j))+(dx^2)*(Psiold(i,j+1)+Psiold(i,j-1));
+            Psinew(i,j)=(((dx*dy)^2)*Omeganew(i,j)+RHS)/(2*(dx^2+dy^2));
+        end
+    end
+    for j=2:m-1
+        Psinew(n,j)=Psinew(n-1,j);
+    end
+    % Update Stream Function...............................................
+    Psiold=Psinew;
+    % Velocity Fields......................................................
+    for i=2:n-1
+        for j=2:m-1
+            Unew(i,j)=(Psinew(i,j+1)-Psinew(i,j-1))/(2*dy);
+        end
+    end
+    Unew(n,:)=Unew(n-1,:);
+    for i=2:n-1
+        for j=2:m-1
+            Vnew(i,j)=-(Psinew(i+1,j)-Psinew(i-1,j))/(2*dx);
+        end
+    end
+    Vnew(n,:)=Vnew(n-1,:);
+    % Bottom wall update...................................................
+    for i=1:n
+        Unew(i,1)=p*x(i,1)/l+q;
+    end
+    % Error Analysis.......................................................
+    Error=(sum(sum(abs(Uold-Unew))));
+    if mod(time,100)==0
+        disp(['Steady_State Error = ', num2str(Error)]);
+    end
+    Err(count,1)=Error;
+    if Error<fraction*Uinlet
+        break
+    end
+    % Update V,U, and Vorticity............................................
+    Uold=Unew;
+    Vold=Vnew;
+    Omegaold=Omeganew;
+    for j=2:m-1
+        Omegaold(1,j)=(Vnew(3,j)-Vnew(1,j))/(2*dx)-(Unew(1,j+1)-Unew(1,j-1))/(2*dy);
+        Omegaold(n,j)=(Vnew(n,j)-Vnew(n-2,j))/(2*dx)-(Unew(n,j+1)-Unew(n,j-1))/(2*dy);
+    end
+    for i=2:n-1
+        Omegaold(i,1)=(Vnew(i+1,1)-Vnew(i-1,1))/(2*dx)-(Unew(i,3)-Unew(i,1))/(2*dy);
+        Omegaold(i,m)=(Vnew(i+1,m)-Vnew(i-1,m))/(2*dx)-(Unew(i,m)-Unew(i,m-2))/(2*dy);
+    end
+    Omegaold(1,1)=Omegaold(2,1);
+    Omegaold(1,m)=Omegaold(2,m);
+end
+toc
+%% Visualization...........................................................
+figure(1)
+contourf(x / l, y / w, Unew, 100, 'LineColor', 'none')
+colormap(jet)
+colorbar
+xlabel('$x / w$', 'FontSize', 12, 'FontWeight', 'bold', 'Interpreter', 'latex')
+ylabel('$y / w$', 'FontSize', 12, 'FontWeight', 'bold', 'Interpreter', 'latex')
+title('Contour-filled Plot of $U(x,y)$', 'FontSize', 14, 'FontWeight', 'bold', 'Interpreter', 'latex')
+grid on;
+figure(2)
+semilogy(Time, Err)
+xlabel('Iteration', 'Interpreter', 'latex')
+ylabel('Steady-State Error', 'Interpreter', 'latex')
+title('Steady-State Error vs Iteration', 'Interpreter', 'latex')
+grid on;
+hold on
+figure(3)
+contour_handle = contour(x / l, y / w, Psinew, 200,'LineWidth', 1);
+colormap(hsv);
+colorbar;
+xlabel('$x / w$', 'FontSize', 12, 'FontWeight', 'bold', 'Interpreter', 'latex')
+ylabel('$y / w$', 'FontSize', 12, 'FontWeight', 'bold', 'Interpreter', 'latex')
+title('Contour Plot of $\Psi(x,y)$', 'FontSize', 14, 'FontWeight', 'bold', 'Interpreter', 'latex')
+grid on
+%% TDMA Function...........................................................
+function [U]=TDMA(a,b,c,dc,M)
+for j=2:M
+    b(j)=b(j)-a(j)*c(j-1)/b(j-1);
+    dc(j)=dc(j)-a(j)*dc(j-1)/b(j-1);
+end
+U(M)=dc(M)/b(M);
+for j=M-1:-1:1
+    U(j)=(dc(j)-c(j)*U(j+1))/b(j);
+end
+end
