@@ -1,0 +1,132 @@
+clc;clear all;digits(100);format long;
+%% User Input Parameters
+disp('The concentration field is u(x,y,t)');
+d0=input('Enter the diffusion coefficient d0 (e.g., 0.0005): ');
+beta=input('Enter the nonlinearity parameter beta in d=d0/(1+beta*u) (e.g., 0): ');
+source=input('Enter the source term constant in s=source*u (e.g., source=0): ');
+Nx=700;Ny=700;Lx=10;Ly=10;dx=Lx/(Nx-1);dy=Ly/(Ny-1);
+x=linspace(0,Lx,Nx);y=linspace(0,Ly,Ny);[X,Y]=meshgrid(y,x);
+Nt=100;T=1;dt=T/Nt;
+jet_center=input('Enter the jet discharge center (x-coordinate as fraction of Lx, between 0 and 1): ');
+jet_width=input('Enter the jet discharge width as fraction of the domain (e.g., 0.1): ');
+jet_center_idx=round(jet_center*Nx);jet_half_width=round((jet_width*Nx)/2);
+jet_start=max(1,jet_center_idx-jet_half_width);jet_end=min(Nx,jet_center_idx+jet_half_width);
+%% Advection Velocity Input for v_x
+v_x_str=input('Enter the function for v_x as a function of (x,y) (e.g., @(x,y) 1 or simply 1 [ideally between between 0 and 7]): ','s');
+numVal=str2double(v_x_str);
+if~isnan(numVal)
+    v_x=@(x,y)numVal;
+else
+    v_x=str2func(v_x_str);
+end
+%% Advection Velocity Input for v_y
+v_y_str=input('Enter the function for v_y as a function of (x,y) (e.g., @(x,y) 1 or simply 1 [ideally between between 0 and 7]): ','s');
+numVal=str2double(v_y_str);
+if~isnan(numVal)
+    v_y=@(x,y)numVal;
+else
+    v_y=str2func(v_y_str);
+end
+rand_level=input('Enter the randomness level for v_x and v_y (e.g., 0.8 for 80%% randomness): ');
+%% Initialization of the Concentration Field
+u_old=zeros(Nx,Ny);
+for i=jet_start:jet_end
+    u_old(i,1)=1;
+end
+u_p12=u_old;u_p22=u_old;u_c12=u_old;u_c22=u_old;u_new=u_old;
+%% Velocity Field Initialization
+Vx=zeros(Nx,Ny);Vy=zeros(Nx,Ny);
+for i=1:Nx
+    for j=1:Ny
+        Vx(i,j)=v_x(x(i),y(j))*(1+rand_level*randn());
+        Vy(i,j)=v_y(x(i),y(j))*(1+rand_level*randn());
+    end
+end
+%%Preallocate derivative arrays
+diffux=zeros(Nx,Ny);diffuy=zeros(Nx,Ny);
+induced_advection_x=zeros(Nx,Ny);induced_advection_y=zeros(Nx,Ny);
+%% Main Simulation Loop (Advection-Diffusion Solver)
+tic
+for n=1:Nt
+    t=n*dt;
+    for i=2:Nx-1
+        for j=2:Ny-1
+            diffux(i,j)=(u_old(i,j)-u_old(i+1,j))/(2*dx);
+            diffuy(i,j)=(u_old(i,j+1)-u_old(i,j-1))/(2*dy);
+        end
+    end
+    diffux(1,:)=diffux(2,:);diffux(Nx,:)=diffux(Nx-1,:);
+    diffux(:,1)=diffux(:,2);diffux(:,Ny)=diffux(:,Ny-1);
+    diffuy(1,:)=diffuy(2,:);diffuy(Nx,:)=diffuy(Nx-1,:);
+    diffuy(:,1)=diffuy(:,2);diffuy(:,Ny)=diffuy(:,Ny-1);
+    for i=2:Nx-1
+        for j=2:Ny-1
+           induced_advection_x(i,j)=d0*(-beta/(1+beta*u_old(i,j))^2)*diffux(i,j);
+           induced_advection_y(i,j)=d0*(-beta/(1+beta*u_old(i,j))^2)*diffuy(i,j);
+        end
+    end
+    X_adv=X-(Vx-induced_advection_x)*dt/2;Y_adv=Y-(Vy-induced_advection_y)*dt/2;
+    X_adv=min(max(X_adv,x(1)),x(end));Y_adv=min(max(Y_adv,y(1)),y(end));
+    u_adv=interp2(X,Y,u_old,X_adv,Y_adv,'linear',0);
+    % Predictor Step
+    for i=2:Nx-1
+        for j=2:Ny-1
+            s=source*u_adv(i,j);
+            d=d0/(1+beta*u_adv(i,j));
+            a=d*(1/dx^2+1/dy^2);
+            a0=(u_adv(i+1,j)+u_adv(i-1,j))/dx^2+(u_adv(i,j+1)+u_adv(i,j-1))/dy^2;
+            u_p12(i,j)=(u_adv(i,j)-s/(2*a)-(d/a)*(a0/2))*exp(-2*a*dt/2)+s/(2*a)+(d/a)*(a0/2);
+            u_p22(i,j)=(u_adv(i,j)-s/(2*a)-(d/a)*(a0/2))*exp(-2*a*dt)+s/(2*a)+(d/a)*(a0/2);
+        end
+    end
+    u_p12(:,Ny)=u_p12(:,Ny-1);u_p22(:,Ny)=u_p22(:,Ny-1);
+    u_p12(Nx,:)=u_p12(Nx-1,:);u_p22(Nx,:)=u_p22(Nx-1,:);
+    u_p12(1,:)=u_p12(2,:);u_p22(1,:)=u_p22(2,:);
+    % Corrector Step
+    for iter=1:1
+        for i=2:Nx-1
+            for j=2:Ny-1
+                s=source*u_adv(i,j);
+                d=d0/(1+beta*u_adv(i,j));
+                a=d*(1/dx^2+1/dy^2);
+                Uold=(u_adv(i+1,j)+u_adv(i-1,j))/dx^2+(u_adv(i,j+1)+u_adv(i,j-1))/dy^2;
+                U12=(u_p12(i+1,j)+u_p12(i-1,j))/dx^2+(u_p12(i,j+1)+u_p12(i,j-1))/dy^2;
+                U22=(u_p22(i+1,j)+u_p22(i-1,j))/dx^2+(u_p22(i,j+1)+u_p22(i,j-1))/dy^2;
+                a_0=Uold;a_1=-(3*Uold-4*U12+U22)/dt;a_2=2*(Uold-2*U12+U22)/dt^2;
+                dtin=dt/2;
+                u_c12(i,j)=s/(2*a)-exp(-2*a*dtin)*(s/(2*a)-u_adv(i,j)+(d*(a_0/2-a_1/(4*a)+a_2/(4*a^2)))/a)+(d*(a_0/2+(a_2*(1/(2*a^2)-dtin/a+dtin^2))/2+(a_1*(dtin-1/(2*a)))/2))/a;
+                dtin=dt;
+                u_c22(i,j)=s/(2*a)-exp(-2*a*dtin)*(s/(2*a)-u_adv(i,j)+(d*(a_0/2-a_1/(4*a)+a_2/(4*a^2)))/a)+(d*(a_0/2+(a_2*(1/(2*a^2)-dtin/a+dtin^2))/2+(a_1*(dtin-1/(2*a)))/2))/a;
+            end
+        end
+        u_c12(:,Ny)=u_c12(:,Ny-1);u_c22(:,Ny)=u_c22(:,Ny-1);
+        u_c12(Nx,:)=u_c12(Nx-1,:);u_c22(Nx,:)=u_c22(Nx-1,:);
+        u_c12(1,:)=u_c12(2,:);u_c22(1,:)=u_c22(2,:);
+        u_p12=u_c12;u_p22=u_c22;
+    end
+    u_new=u_c22;
+    u_new(:,Ny)=u_new(:,Ny-1);u_new(Nx,:)=u_new(Nx-1,:);
+    u_new(1,:)=u_new(2,:);
+    X_adv=X-(Vx-induced_advection_x)*dt/2;Y_adv=Y-(Vy-induced_advection_y)*dt/2;
+    X_adv=min(max(X_adv,x(1)),x(end));Y_adv=min(max(Y_adv,y(1)),y(end));
+    u_adv=interp2(X,Y,u_new,X_adv,Y_adv,'linear',0);
+    u_old=u_adv;
+end
+toc;CFL=d0*dt/dx^2
+%% Visualization
+figure(1);
+numLevels=100;
+contourf(X,Y,u_new,numLevels,'EdgeColor','none');
+cmap=colormap('jet'); cmap(1,:)=[1,1,1]; colormap(cmap);
+cbar=colorbar;
+set(cbar,'Color','k');
+ylabel(cbar,'Concentration','FontName','Cambria','Color','k');
+set(gca,'Color','none'); set(gcf,'Color','w');
+set(gca,'XColor','k','YColor','k','GridColor','k','FontName','Cambria');
+set(gca,'XTick',linspace(min(X(:)),max(X(:)),5));
+set(gca,'YTick',linspace(min(Y(:)),max(Y(:)),5));
+xlabel('X','FontName','Cambria','Color','k');
+ylabel('Y','FontName','Cambria','Color','k');
+title('Normalized Concentration Field at Time (T)=1','FontName','Cambria');
+caxis([min(u_new(:)),max(u_new(:))]);
+grid on; box on; axis tight; hold on;
